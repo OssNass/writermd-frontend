@@ -9,6 +9,7 @@ import TableHeader from '@tiptap/extension-table-header';
 import TableCell from '@tiptap/extension-table-cell';
 import Placeholder from '@tiptap/extension-placeholder';
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
+import Image from '@tiptap/extension-image';
 import { common, createLowlight } from 'lowlight';
 import { Markdown } from 'tiptap-markdown';
 import { Toolbar } from './Toolbar';
@@ -19,6 +20,16 @@ const lowlight = createLowlight(common);
 interface Props { content: string; onChange: (c: string) => void }
 
 type MarkdownStorage = { markdown: { getMarkdown: () => string } };
+
+// تحويل أي ملف صورة إلى نص Base64 لتخزينه مؤقتاً داخل المستند
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
 
 export const Editor: React.FC<Props> = ({ content, onChange }) => {
   const editor = useEditor({
@@ -32,6 +43,9 @@ export const Editor: React.FC<Props> = ({ content, onChange }) => {
       TableHeader,
       TableCell,
       MathNode,
+      Image.configure({
+        HTMLAttributes: { class: 'editor-image' },
+      }),
       Placeholder.configure({ placeholder: 'اكتب هنا...' }),
       Markdown.configure({ tightLists: true }),
     ],
@@ -39,6 +53,48 @@ export const Editor: React.FC<Props> = ({ content, onChange }) => {
     shouldRerenderOnTransaction: true,
     editorProps: {
       attributes: { class: 'editor-content', dir: 'rtl' },
+
+      // دعم السحب والإفلات المباشر للصور داخل منطقة الكتابة
+      handleDrop: (view, event) => {
+        const files = event.dataTransfer?.files;
+        if (!files || files.length === 0) return false;
+
+        const imageFile = Array.from(files).find((f) => f.type.startsWith('image/'));
+        if (!imageFile) return false;
+
+        event.preventDefault();
+
+        fileToBase64(imageFile).then((base64) => {
+          const { schema } = view.state;
+          const node = schema.nodes.image.create({ src: base64 });
+          const coords = view.posAtCoords({ left: event.clientX, top: event.clientY });
+          const pos = coords ? coords.pos : view.state.selection.from;
+          const transaction = view.state.tr.insert(pos, node);
+          view.dispatch(transaction);
+        });
+
+        return true;
+      },
+
+      // دعم اللصق المباشر لصورة من الحافظة (Ctrl+V)
+      handlePaste: (view, event) => {
+        const files = event.clipboardData?.files;
+        if (!files || files.length === 0) return false;
+
+        const imageFile = Array.from(files).find((f) => f.type.startsWith('image/'));
+        if (!imageFile) return false;
+
+        event.preventDefault();
+
+        fileToBase64(imageFile).then((base64) => {
+          const { schema } = view.state;
+          const node = schema.nodes.image.create({ src: base64 });
+          const transaction = view.state.tr.insert(view.state.selection.from, node);
+          view.dispatch(transaction);
+        });
+
+        return true;
+      },
     },
     onUpdate: ({ editor }) => {
       onChange((editor.storage as unknown as MarkdownStorage).markdown.getMarkdown());
